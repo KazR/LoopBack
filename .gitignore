@@ -1,0 +1,27 @@
+# Ignore recordings folder
+recordings/
+
+# General Python ignores
+*.pyc
+*.pyo
+__pycache__/
+*.pyd
+.Python
+
+# Virtual environment
+env/
+venv/
+ENV/
+VENV/
+*.env
+*.venv
+
+# IDE-specific ignores
+.vscode/
+.idea/
+*.sublime-workspace
+*.sublime-project
+
+# System files
+.DS_Store
+Thumbs.db
