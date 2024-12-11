@@ -25,3 +25,4 @@ VENV/
 # System files
 .DS_Store
 Thumbs.db
+__pycache__/recorder.cpython-311.pyc
