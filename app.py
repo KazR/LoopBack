@@ -1,6 +1,17 @@
 import tkinter as tk
+import numpy as np
 from tkinter import ttk
 import sounddevice as sd
+from threading import Thread
+from recorder import recorder
+
+
+recorder.start_recording()
+
+def on_record_button_click():
+    record_button.config(text="Saving audio...", bg="#FFC107")
+    recorder.save_last_buffer()  # Save the last 4 minutes of audio
+    record_button.config(text="Record", bg="#EB5E28")
 
 # Function to get available microphones
 def get_microphone_list():
@@ -20,10 +31,17 @@ def get_wasapi_devices():
     wasapi_devices = [device['name'] for device in devices if device['hostapi'] == 1]
     return wasapi_devices
 
-# Function to record audio
-def on_record_button_click():
-    selected_mic = mic_dropdown.get()
-    selected_wasapi = wasapi_dropdown.get()
+# Function to display selected loopback device
+def select_device(event):
+    selected_device= wasapi_dropdown.get()
+    print(f"Selected audio device: {selected_device}")
+
+# Function to monitor audio levels
+def update_level_meter(indata, frames, time, status):
+    """Update the decibel meter based on real-time audio levels."""
+    meter_value = np.linalg.norm(indata)  # Root mean square value
+    meter.set(meter_value / 32768)  # Normalize to a range of 0.0 to 1.0
+
 
 # Binding logic
 def record_binding(event=None):
@@ -42,7 +60,7 @@ def binding_event(event):
 # Create main window
 app = tk.Tk()
 app.title("LoopBack")
-app.geometry("600x300")  # Adjusted size for additional elements
+app.geometry("800x300")  # Adjusted size for additional elements
 app.resizable(False, False)  # Disable resizing
 app.configure(bg="#252422")
 
@@ -61,13 +79,21 @@ mic_dropdown = ttk.Combobox(app, values=microphone_list, state="readonly", width
 mic_dropdown.grid(row=0, column=1, padx=10, pady=10)
 mic_dropdown.bind("<<ComboboxSelected>>", select_microphone)
 
+# Decibel Meter for Microphone
+meter = ttk.Progressbar(app, orient="horizontal", length=200, mode="determinate", maximum=1.0)
+meter.grid(row=0, column=2, padx=10, pady=10)
+
 # AUDIO DEVICE SELECTION
 audio_device_label = tk.Label(app, text="Select Audio Device:", bg="#252422", fg="#CCC5B9", anchor="w", font=("Inter", 12))
 audio_device_label.grid(row=1, column=0, padx=10, pady=10, sticky="w")
 
 wasapi_dropdown = ttk.Combobox(app, values=wasapi_devices, state="readonly", width=50)
 wasapi_dropdown.grid(row=1, column=1, padx=10, pady=10)
-wasapi_dropdown.bind("<<ComboboxSelected>>", select_microphone)
+wasapi_dropdown.bind("<<ComboboxSelected>>", select_device)
+
+# Decibel Meter for Audio Device
+meter_audio = ttk.Progressbar(app, orient="horizontal", length=200, mode="determinate", maximum=1.0)
+meter_audio.grid(row=1, column=2, padx=10, pady=10)
 
 # RECORD BINDING
 record_binding_label = tk.Label(app, text="Record Binding:", bg="#252422", fg="#CCC5B9", anchor="w", font=("Inter", 12))
@@ -80,9 +106,23 @@ binding_button.grid(row=2, column=1, padx=10, pady=10, sticky="w")
 # Bind events
 app.bind("<Key>", binding_event)
 
-# RECORD BUTTON
-record_button = tk.Button(app, text="Record", font=("Inter", 12), command=on_record_button_click, bg="#EB5E28", fg="#FFFCF2", width=35)
-record_button.grid(row=3, column=1, padx=10, pady=10,sticky="w")
+# Record button
+record_button = tk.Button(
+    app,
+    text="Record",
+    font=("Inter", 12),
+    command=on_record_button_click,
+    bg="#EB5E28",
+    fg="#FFFCF2",
+    width=35,
+)
+record_button.grid(row=3, column=1, padx=10, pady=10, sticky="w")
+
+def on_closing():
+    recorder.stop_recording()
+    app.destroy()
+
+app.protocol("WM_DELETE_WINDOW", on_closing)
 
 # Run the application
 app.mainloop()
