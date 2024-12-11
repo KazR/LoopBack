@@ -6,7 +6,28 @@ from threading import Thread
 from recorder import recorder
 
 
-recorder.start_recording()
+listening = False
+
+def toggle_listening():
+    """Toggle the listening state."""
+    global listening
+    if listening:
+        recorder.stop_recording()  # Stop capturing audio
+        toggle_button.config(text="Start Listening", bg="#4CAF50")
+        listening = False
+    else:
+        recorder.start_recording()  # Start capturing audio
+        toggle_button.config(text="Stop Listening", bg="#F44336")
+        listening = True
+
+def save_audio():
+    """Save the current buffer to a file."""
+    if listening:
+        recorder.save_last_buffer()
+        record_button.config(text="Saved!", bg="#FFC107")
+        app.after(2000, lambda: record_button.config(text="Record", bg="#EB5E28"))
+    else:
+        print("Not listening. Cannot save audio.")
 
 def on_record_button_click():
     record_button.config(text="Saving audio...", bg="#FFC107")
@@ -15,6 +36,7 @@ def on_record_button_click():
 
 # Function to get available microphones
 def get_microphone_list():
+    """Get the list of input-capable devices."""
     input_devices = sd.query_devices()
     devices = [device['name'] for device in input_devices if device['max_input_channels'] > 0]
     return devices
@@ -22,19 +44,29 @@ def get_microphone_list():
 # Function to display selected microphone
 def select_microphone(event):
     selected_microphone = mic_dropdown.get()
+    device_list = sd.query_devices()
+    for index, device in enumerate(device_list):
+        if device['name'] == selected_microphone:
+            recorder.set_microphone(index)
+            break
     print(f"Selected Microphone: {selected_microphone}")
 
 # Function to get loopback devices
 def get_wasapi_devices():
+    """Get the list of WASAPI devices for system audio (loopback)."""
     devices = sd.query_devices()
-    # Filter to show only WASAPI devices (hostapi == 1 for WASAPI)
-    wasapi_devices = [device['name'] for device in devices if device['hostapi'] == 1]
+    wasapi_devices = [device['name'] for device in devices if device['hostapi'] == 1 and device['max_input_channels'] > 0]
     return wasapi_devices
 
 # Function to display selected loopback device
 def select_device(event):
-    selected_device= wasapi_dropdown.get()
-    print(f"Selected audio device: {selected_device}")
+    selected_device = wasapi_dropdown.get()
+    device_list = sd.query_devices()
+    for index, device in enumerate(device_list):
+        if device['name'] == selected_device:
+            recorder.set_system_audio(index)
+            break
+    print(f"Selected Audio Device: {selected_device}")
 
 # Function to monitor audio levels
 def update_level_meter(indata, frames, time, status):
@@ -106,17 +138,29 @@ binding_button.grid(row=2, column=1, padx=10, pady=10, sticky="w")
 # Bind events
 app.bind("<Key>", binding_event)
 
+# Add Toggle Button for Listening
+toggle_button = tk.Button(
+    app,
+    text="Start Listening",
+    font=("Inter", 12),
+    command=toggle_listening,
+    bg="#4CAF50",
+    fg="#FFFCF2",
+    width=35,
+)
+toggle_button.grid(row=3, column=1, padx=10, pady=10, sticky="w")
+
 # Record button
 record_button = tk.Button(
     app,
     text="Record",
     font=("Inter", 12),
-    command=on_record_button_click,
+    command=save_audio,
     bg="#EB5E28",
     fg="#FFFCF2",
     width=35,
 )
-record_button.grid(row=3, column=1, padx=10, pady=10, sticky="w")
+record_button.grid(row=4, column=1, padx=10, pady=10, sticky="w")
 
 def on_closing():
     recorder.stop_recording()
