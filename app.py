@@ -8,6 +8,11 @@ from datetime import datetime
 import soundcard as sc
 import soundfile as sf
 import numpy as np
+import pyglet
+
+pyglet.font.add_file('Fonts/Altone-Regular.ttf')
+title_font = ("Altone Trial", 24)
+text_font = ("Altone Trial", 12)
 
 # Constants
 CHUNK = 512
@@ -31,14 +36,25 @@ p = pyaudio.PyAudio()
 
 def listen_to_microphone():
     """Continuously listen to the microphone and store data in the buffer."""
-    stream = p.open(format=FORMAT, channels=CHANNELS, rate=RATE, input=True, frames_per_buffer=CHUNK)
+    stream = p.open(format=FORMAT, channels=1, rate=RATE, input=True, frames_per_buffer=CHUNK)
     try:
         while listening.is_set():
             data = stream.read(CHUNK)
-            audio_buffer.append(data)
+            # Convert mono data to stereo
+            stereo_data = convert_mono_to_stereo(data)
+            audio_buffer.append(stereo_data)
     finally:
         stream.stop_stream()
         stream.close()
+
+def convert_mono_to_stereo(mono_data):
+    """Convert mono audio data to stereo by duplicating each sample."""
+    stereo_data = bytearray()
+    for i in range(0, len(mono_data), 2):  # Process 2 bytes (1 sample) at a time
+        sample = mono_data[i:i+2]  # Extract one sample (2 bytes)
+        stereo_data.extend(sample)  # Write to left channel
+        stereo_data.extend(sample)  # Write to right channel
+    return bytes(stereo_data)
 
 def listen_to_system_audio():
     """Continuously listen to system audio and store data in the buffer."""
@@ -99,11 +115,11 @@ def toggle_listening():
         listening.set()
         Thread(target=listen_to_microphone, daemon=True).start()
         Thread(target=listen_to_system_audio, daemon=True).start()
-        toggle_button.config(text="Stop Listening")
+        toggle_button.config(text="Stop Listening", bg="#CCC5B9")  
         update_status("Listening started.")
     else:
         listening.clear()
-        toggle_button.config(text="Start Listening")
+        toggle_button.config(text="Start Listening", bg="#EB5E28") 
         update_status("Listening stopped.")
 
 def record_audio():
@@ -123,46 +139,49 @@ def update_status(message):
 # Create main window
 app = tk.Tk()
 app.title("LoopBack")
-app.geometry("750x350")
+app.geometry("380x325")
 app.resizable(False, False)
 app.configure(bg="#252422")
+
+MyLabel = tk.Label(app,text="loopback",font=title_font, bg="#252422", fg="#FFFCF2")
+MyLabel.grid(row=0, column=1, padx=10, pady=10, sticky="nsew")
 
 # Add Toggle Button for Listening
 toggle_button = tk.Button(
     app,
     text="Start Listening",
-    font=("Inter", 12),
+    font=text_font,
     bg="#EB5E28",
     fg="#FFFCF2",
     width=35,
     command=toggle_listening
 )
-toggle_button.grid(row=3, column=1, padx=10, pady=10, sticky="w")
+toggle_button.grid(row=3, column=1, padx=10, pady=10, sticky="nsew")
 
 # Record button
 record_button = tk.Button(
     app,
     text="Record",
-    font=("Inter", 12),
+    font=text_font,
     bg="#EB5E28",
     fg="#FFFCF2",
     width=35,
     command=record_audio
 )
-record_button.grid(row=4, column=1, padx=10, pady=10, sticky="w")
+record_button.grid(row=4, column=1, padx=10, pady=10, sticky="nsew")
 
 # Status
 status_box = tk.Text(
     app,
-    height=5,
-    width=103,
+    height=8,
+    width=45,
     bg="#252422",
     fg="#FFFCF2",
     font=("Inter", 10),
     wrap="word",
     state="disabled",
 )
-status_box.grid(row=5, column=0, columnspan=3, padx=10, pady=10, sticky="w")
+status_box.grid(row=5, column=1, columnspan=3, padx=10, pady=10, sticky="nsew")
 
 def on_closing():
     """Handle the application closing event."""
