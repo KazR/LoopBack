@@ -3,7 +3,6 @@ from tkinter import ttk
 from threading import Thread, Event
 from collections import deque
 import pyaudio
-import wave
 import os
 from datetime import datetime
 import soundcard as sc

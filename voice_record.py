@@ -11,7 +11,6 @@ RATE = 44100
 RECORD_SECONDS = 5
 BUFFER_SECONDS = 240  # 4 minutes
 MAX_FRAMES = BUFFER_SECONDS * RATE // CHUNK
-default_speaker = sc.default_speaker()
 
 # Circular buffer to hold the last 4 minutes of audio
 audio_buffer = deque(maxlen=MAX_FRAMES)
