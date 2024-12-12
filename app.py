@@ -1,152 +1,142 @@
 import tkinter as tk
-import numpy as np
 from tkinter import ttk
-import sounddevice as sd
-from threading import Thread
-from recorder import recorder
+from threading import Thread, Event
+from collections import deque
+import pyaudio
+import wave
+import os
+from datetime import datetime
+import soundcard as sc
+import soundfile as sf
+import numpy as np
 
+# Constants
+CHUNK = 512
+FORMAT = pyaudio.paInt16
+CHANNELS = 2
+RATE = 44100
+BUFFER_SECONDS = 240  # 4 minutes
+MAX_FRAMES = BUFFER_SECONDS * RATE // CHUNK
+SAMPLE_RATE = 44100  # For system audio
 
-listening = False
+# Circular buffer
+audio_buffer = deque(maxlen=MAX_FRAMES)
+system_audio_buffer = deque(maxlen=MAX_FRAMES)
+
+# Control flags
+listening = Event()
+recording = Event()
+
+# Audio setup
+p = pyaudio.PyAudio()
+
+def listen_to_microphone():
+    """Continuously listen to the microphone and store data in the buffer."""
+    stream = p.open(format=FORMAT, channels=CHANNELS, rate=RATE, input=True, frames_per_buffer=CHUNK)
+    try:
+        while listening.is_set():
+            data = stream.read(CHUNK)
+            audio_buffer.append(data)
+    finally:
+        stream.stop_stream()
+        stream.close()
+
+def listen_to_system_audio():
+    """Continuously listen to system audio and store data in the buffer."""
+    with sc.get_microphone(id=str(sc.default_speaker().name), include_loopback=True).recorder(samplerate=SAMPLE_RATE) as mic:
+        while listening.is_set():
+            data = mic.record(numframes=CHUNK)
+            system_audio_buffer.append(data)
+
+def save_combined_recording():
+    """Combine and save the microphone and system audio buffers to a .wav file."""
+    if not audio_buffer and not system_audio_buffer:
+        update_status("Buffers are empty. Nothing to save.")
+        return
+
+    # Ensure the 'recordings' directory exists
+    recordings_dir = "recordings"
+    os.makedirs(recordings_dir, exist_ok=True)
+
+    # Get today's date in YYYY-MM-DD format
+    today_date = datetime.now().strftime("%Y-%m-%d")
+
+    # Find the next sequential number for today's date
+    existing_files = [
+        f for f in os.listdir(recordings_dir)
+        if f.startswith(f"recording-{today_date}-") and f.endswith(".wav")
+    ]
+    numbers = [
+        int(f.split(f"recording-{today_date}-")[1].split(".wav")[0])
+        for f in existing_files if f.split(f"recording-{today_date}-")[1].split(".wav")[0].isdigit()
+    ]
+    next_number = max(numbers, default=0) + 1
+
+    # Generate the filename
+    filename = os.path.join(recordings_dir, f"recording-{today_date}-{next_number}.wav")
+
+    # Combine audio data
+    mic_data = b''.join(audio_buffer)
+    system_data = np.concatenate(system_audio_buffer)
+
+    # Match sample rates
+    mic_array = np.frombuffer(mic_data, dtype=np.int16).reshape(-1, CHANNELS)
+    system_array = np.int16(system_data * 32767)  # Convert float to int16
+
+    combined_array = np.hstack((mic_array[:len(system_array)], system_array[:len(mic_array)]))
+
+    # Save the combined audio
+    sf.write(filename, combined_array, RATE)
+    update_status(f"Recording saved as {filename}")
+
+    # Clear buffers
+    audio_buffer.clear()
+    system_audio_buffer.clear()
+    update_status("Buffers cleared for the next recording.")
 
 def toggle_listening():
-    """Toggle the listening state."""
-    global listening
-    if listening:
-        recorder.stop_recording()  # Stop capturing audio
-        toggle_button.config(text="Start Listening", bg="#4CAF50")
-        listening = False
+    """Start or stop the listening threads."""
+    if not listening.is_set():
+        listening.set()
+        Thread(target=listen_to_microphone, daemon=True).start()
+        Thread(target=listen_to_system_audio, daemon=True).start()
+        toggle_button.config(text="Stop Listening")
+        update_status("Listening started.")
     else:
-        recorder.start_recording()  # Start capturing audio
-        toggle_button.config(text="Stop Listening", bg="#F44336")
-        listening = True
+        listening.clear()
+        toggle_button.config(text="Start Listening")
+        update_status("Listening stopped.")
 
-def save_audio():
-    """Save the current buffer to a file."""
-    if listening:
-        recorder.save_last_buffer()
-        record_button.config(text="Saved!", bg="#FFC107")
-        app.after(2000, lambda: record_button.config(text="Record", bg="#EB5E28"))
+def record_audio():
+    """Record the current buffer to a file."""
+    if listening.is_set():
+        save_combined_recording()
     else:
-        print("Not listening. Cannot save audio.")
+        update_status("Please start listening before recording.")
 
-def on_record_button_click():
-    record_button.config(text="Saving audio...", bg="#FFC107")
-    recorder.save_last_buffer()  # Save the last 4 minutes of audio
-    record_button.config(text="Record", bg="#EB5E28")
-
-# Function to get available microphones
-def get_microphone_list():
-    """Get the list of input-capable devices."""
-    input_devices = sd.query_devices()
-    devices = [device['name'] for device in input_devices if device['max_input_channels'] > 0]
-    return devices
-
-# Function to display selected microphone
-def select_microphone(event):
-    selected_microphone = mic_dropdown.get()
-    device_list = sd.query_devices()
-    for index, device in enumerate(device_list):
-        if device['name'] == selected_microphone:
-            recorder.set_microphone(index)
-            break
-    print(f"Selected Microphone: {selected_microphone}")
-
-# Function to get loopback devices
-def get_wasapi_devices():
-    """Get the list of WASAPI devices for system audio (loopback)."""
-    devices = sd.query_devices()
-    wasapi_devices = [device['name'] for device in devices if device['hostapi'] == 1 and device['max_input_channels'] > 0]
-    return wasapi_devices
-
-# Function to display selected loopback device
-def select_device(event):
-    selected_device = wasapi_dropdown.get()
-    device_list = sd.query_devices()
-    for index, device in enumerate(device_list):
-        if device['name'] == selected_device:
-            recorder.set_system_audio(index)
-            break
-    print(f"Selected Audio Device: {selected_device}")
-
-# Function to monitor audio levels
-def update_level_meter(indata, frames, time, status):
-    """Update the decibel meter based on real-time audio levels."""
-    meter_value = np.linalg.norm(indata)  # Root mean square value
-    meter.set(meter_value / 32768)  # Normalize to a range of 0.0 to 1.0
-
-
-# Binding logic
-def record_binding(event=None):
-    global recording
-    if recording:
-        binding_button.config(text=f"Recorded: {event.keysym or event.type}")
-        recording = False
-    else:
-        binding_button.config(text="Press any key or click to bind!")
-        recording = True
-
-def binding_event(event):
-    if recording:
-        binding_button.config(text=f"Bound to: {event.keysym if hasattr(event, 'keysym') else event.type}")
+def update_status(message):
+    """Update the status box with a new message."""
+    status_box.config(state="normal")
+    status_box.insert(tk.END, f"{message}\n")
+    status_box.config(state="disabled")
+    status_box.see(tk.END)
 
 # Create main window
 app = tk.Tk()
 app.title("LoopBack")
-app.geometry("800x300")  # Adjusted size for additional elements
-app.resizable(False, False)  # Disable resizing
+app.geometry("750x350")
+app.resizable(False, False)
 app.configure(bg="#252422")
-
-# Initial state
-recording = False
-
-# Get devices
-microphone_list = get_microphone_list()
-wasapi_devices = get_wasapi_devices()
-
-# MICROPHONE SELECTION
-mic_label = tk.Label(app, text="Select Microphone:", bg="#252422", fg="#CCC5B9", anchor="w", font=("Inter", 12))
-mic_label.grid(row=0, column=0, padx=10, pady=10, sticky="w")
-
-mic_dropdown = ttk.Combobox(app, values=microphone_list, state="readonly", width=50)
-mic_dropdown.grid(row=0, column=1, padx=10, pady=10)
-mic_dropdown.bind("<<ComboboxSelected>>", select_microphone)
-
-# Decibel Meter for Microphone
-meter = ttk.Progressbar(app, orient="horizontal", length=200, mode="determinate", maximum=1.0)
-meter.grid(row=0, column=2, padx=10, pady=10)
-
-# AUDIO DEVICE SELECTION
-audio_device_label = tk.Label(app, text="Select Audio Device:", bg="#252422", fg="#CCC5B9", anchor="w", font=("Inter", 12))
-audio_device_label.grid(row=1, column=0, padx=10, pady=10, sticky="w")
-
-wasapi_dropdown = ttk.Combobox(app, values=wasapi_devices, state="readonly", width=50)
-wasapi_dropdown.grid(row=1, column=1, padx=10, pady=10)
-wasapi_dropdown.bind("<<ComboboxSelected>>", select_device)
-
-# Decibel Meter for Audio Device
-meter_audio = ttk.Progressbar(app, orient="horizontal", length=200, mode="determinate", maximum=1.0)
-meter_audio.grid(row=1, column=2, padx=10, pady=10)
-
-# RECORD BINDING
-record_binding_label = tk.Label(app, text="Record Binding:", bg="#252422", fg="#CCC5B9", anchor="w", font=("Inter", 12))
-record_binding_label.grid(row=2, column=0, padx=10, pady=10, sticky="w")
-
-# Binding button
-binding_button = tk.Button(app, text="Click to create binding", bg="#FFFCF2", anchor="w", font=("Arial", 8), command=record_binding, width=52, height=1)
-binding_button.grid(row=2, column=1, padx=10, pady=10, sticky="w")
-
-# Bind events
-app.bind("<Key>", binding_event)
 
 # Add Toggle Button for Listening
 toggle_button = tk.Button(
     app,
     text="Start Listening",
     font=("Inter", 12),
-    command=toggle_listening,
-    bg="#4CAF50",
+    bg="#EB5E28",
     fg="#FFFCF2",
     width=35,
+    command=toggle_listening
 )
 toggle_button.grid(row=3, column=1, padx=10, pady=10, sticky="w")
 
@@ -155,18 +145,35 @@ record_button = tk.Button(
     app,
     text="Record",
     font=("Inter", 12),
-    command=save_audio,
     bg="#EB5E28",
     fg="#FFFCF2",
     width=35,
+    command=record_audio
 )
 record_button.grid(row=4, column=1, padx=10, pady=10, sticky="w")
 
+# Status
+status_box = tk.Text(
+    app,
+    height=5,
+    width=103,
+    bg="#252422",
+    fg="#FFFCF2",
+    font=("Inter", 10),
+    wrap="word",
+    state="disabled",
+)
+status_box.grid(row=5, column=0, columnspan=3, padx=10, pady=10, sticky="w")
+
 def on_closing():
-    recorder.stop_recording()
+    """Handle the application closing event."""
+    listening.clear()
     app.destroy()
 
 app.protocol("WM_DELETE_WINDOW", on_closing)
 
 # Run the application
 app.mainloop()
+
+# Cleanup
+p.terminate()
