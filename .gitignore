@@ -28,3 +28,4 @@ VENV/
 Thumbs.db
 __pycache__/recorder.cpython-311.pyc
 __pycache__/recorder.cpython-311.pyc
+config.json
