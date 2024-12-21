@@ -8,11 +8,9 @@ from datetime import datetime
 import soundcard as sc
 import soundfile as sf
 import numpy as np
-import pyglet
 
-pyglet.font.add_file('Fonts/Altone-Regular.ttf')
-title_font = ("Altone Trial", 24)
-text_font = ("Altone Trial", 12)
+title_font = ("Corbel", 24)
+text_font = ("Corbel", 12)
 
 # Constants
 CHUNK = 512
@@ -119,8 +117,12 @@ def toggle_listening():
         update_status("Listening started.")
     else:
         listening.clear()
+        # Clear buffers when stopping listening
+        audio_buffer.clear()
+        system_audio_buffer.clear()
         toggle_button.config(text="Start Listening", bg="#EB5E28") 
-        update_status("Listening stopped.")
+        update_status("Listening stopped. Buffers cleared.")
+
 
 def record_audio():
     """Record the current buffer to a file."""
@@ -138,12 +140,12 @@ def update_status(message):
 
 # Create main window
 app = tk.Tk()
-app.title("LoopBack")
-app.geometry("380x325")
+app.title("loopBack")
+app.geometry("345x300")
 app.resizable(False, False)
 app.configure(bg="#252422")
 
-MyLabel = tk.Label(app,text="loopback",font=title_font, bg="#252422", fg="#FFFCF2")
+MyLabel = tk.Label(app,text="loopBack",font=title_font, bg="#252422", fg="#FFFCF2")
 MyLabel.grid(row=0, column=1, padx=10, pady=10, sticky="nsew")
 
 # Add Toggle Button for Listening
@@ -177,9 +179,9 @@ status_box = tk.Text(
     width=45,
     bg="#252422",
     fg="#FFFCF2",
-    font=("Inter", 10),
+    font=("Lucida Console", 8),
     wrap="word",
-    state="disabled",
+    state="disabled"
 )
 status_box.grid(row=5, column=1, columnspan=3, padx=10, pady=10, sticky="nsew")
 
