@@ -1,6 +1,8 @@
 # Ignore folders
 recordings/
 old/
+build/
+dist/
 
 # General Python ignores
 *.pyc
@@ -29,3 +31,4 @@ Thumbs.db
 __pycache__/recorder.cpython-311.pyc
 __pycache__/recorder.cpython-311.pyc
 config.json
+app.spec
