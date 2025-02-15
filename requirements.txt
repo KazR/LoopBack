@@ -2,3 +2,6 @@ pyaudio
 soundcard
 soundfile
 numpy
+wheel
+playsound@1.2.2
+pynput

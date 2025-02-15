@@ -1,139 +1,68 @@
 import tkinter as tk
 from tkinter import ttk
-from threading import Thread, Event
-from collections import deque
-import pyaudio
-import os
-from datetime import datetime
-import soundcard as sc
-import soundfile as sf
-import numpy as np
-import json
+from logic import (
+    toggle_listening,
+    save_combined_recording,
+    load_config,
+    save_config,
+    cleanup
+)
+from pynput import keyboard
+import threading
 
 # Fonts
 title_font = ("Corbel", 24)
 text_font = ("Corbel", 12)
 
-# Constants
-CHUNK = 512
-FORMAT = pyaudio.paInt16
-CHANNELS = 2
-RATE = 44100
-BUFFER_SECONDS = 240  # 4 minutes
-MAX_FRAMES = BUFFER_SECONDS * RATE // CHUNK
-SAMPLE_RATE = 44100  # For system audio
-CONFIG_FILE = "config.json"
-
-# Circular buffer
-audio_buffer = deque(maxlen=MAX_FRAMES)
-system_audio_buffer = deque(maxlen=MAX_FRAMES)
-
-# Control flags
-listening = Event()
-recording = Event()
-
-# Audio setup
-p = pyaudio.PyAudio()
-
-# Load or initialize config
-def load_config():
-    if os.path.exists(CONFIG_FILE):
-        with open(CONFIG_FILE, "r") as file:
-            return json.load(file)
-    return {"record_binding": ""}
-
-def save_config(config):
-    with open(CONFIG_FILE, "w") as file:
-        json.dump(config, file)
-
+# Load configuration
 config = load_config()
 record_binding = config.get("record_binding", "")
 
-# Functions
-def listen_to_microphone():
-    stream = p.open(format=FORMAT, channels=1, rate=RATE, input=True, frames_per_buffer=CHUNK)
-    try:
-        while listening.is_set():
-            data = stream.read(CHUNK)
-            stereo_data = convert_mono_to_stereo(data)
-            audio_buffer.append(stereo_data)
-    finally:
-        stream.stop_stream()
-        stream.close()
+# Create main window
+app = tk.Tk()
+app.title("loopBack")
+app.geometry("345x350")
+app.resizable(False, False)
+app.configure(bg="#252422")
 
-def convert_mono_to_stereo(mono_data):
-    stereo_data = bytearray()
-    for i in range(0, len(mono_data), 2):
-        sample = mono_data[i:i+2]
-        stereo_data.extend(sample)
-        stereo_data.extend(sample)
-    return bytes(stereo_data)
-
-def listen_to_system_audio():
-    with sc.get_microphone(id=str(sc.default_speaker().name), include_loopback=True).recorder(samplerate=SAMPLE_RATE) as mic:
-        while listening.is_set():
-            data = mic.record(numframes=CHUNK)
-            system_audio_buffer.append(data)
-
-def save_combined_recording():
-    if not audio_buffer and not system_audio_buffer:
-        update_status("Buffers are empty. Nothing to save.")
-        return
-
-    recordings_dir = "recordings"
-    os.makedirs(recordings_dir, exist_ok=True)
-    today_date = datetime.now().strftime("%Y-%m-%d")
-
-    existing_files = [
-        f for f in os.listdir(recordings_dir)
-        if f.startswith(f"recording-{today_date}-") and f.endswith(".wav")
-    ]
-    numbers = [
-        int(f.split(f"recording-{today_date}-")[1].split(".wav")[0])
-        for f in existing_files if f.split(f"recording-{today_date}-")[1].split(".wav")[0].isdigit()
-    ]
-    next_number = max(numbers, default=0) + 1
-    filename = os.path.join(recordings_dir, f"recording-{today_date}-{next_number}.wav")
-
-    mic_data = b''.join(audio_buffer)
-    system_data = np.concatenate(system_audio_buffer)
-
-    mic_array = np.frombuffer(mic_data, dtype=np.int16).reshape(-1, CHANNELS)
-    system_array = np.int16(system_data * 32767)
-    combined_array = np.hstack((mic_array[:len(system_array)], system_array[:len(mic_array)]))
-
-    sf.write(filename, combined_array, RATE)
-    update_status(f"Recording saved as {filename}")
-
-    audio_buffer.clear()
-    system_audio_buffer.clear()
-    update_status("Buffers cleared for the next recording.")
-
-def toggle_listening():
-    if not listening.is_set():
-        listening.set()
-        Thread(target=listen_to_microphone, daemon=True).start()
-        Thread(target=listen_to_system_audio, daemon=True).start()
-        toggle_button.config(text="Stop Listening", bg="#CCC5B9")
-        update_status("Listening started.")
-    else:
-        listening.clear()
-        audio_buffer.clear()
-        system_audio_buffer.clear()
-        toggle_button.config(text="Start Listening", bg="#EB5E28")
-        update_status("Listening stopped. Buffers cleared.")
-
-def record_audio():
-    if listening.is_set():
-        save_combined_recording()
-    else:
-        update_status("Please start listening before recording.")
+# Global variables
+current_keys = set()
+listener = None
 
 def update_status(message):
+    # Need to use after() to update GUI from different thread
+    app.after(0, lambda: _update_status_internal(message))
+
+def _update_status_internal(message):
     status_box.config(state="normal")
     status_box.insert(tk.END, f"{message}\n")
     status_box.config(state="disabled")
     status_box.see(tk.END)
+
+def on_press(key):
+    try:
+        # Convert key to string representation
+        key_str = key.char if hasattr(key, 'char') else str(key)
+        current_keys.add(key_str)
+        
+        # Check if the current combination matches the binding
+        if record_binding and set(record_binding.strip('<>').split('+')) == current_keys:
+            # Run the recording function in the main thread
+            app.after(0, lambda: save_combined_recording(update_status))
+    except AttributeError:
+        pass
+
+def on_release(key):
+    try:
+        key_str = key.char if hasattr(key, 'char') else str(key)
+        current_keys.discard(key_str)
+    except AttributeError:
+        pass
+
+def start_keyboard_listener():
+    global listener
+    listener = keyboard.Listener(on_press=on_press, on_release=on_release)
+    listener.start()
 
 def set_record_binding():
     update_status("Press a key combination to set as the record binding.")
@@ -141,6 +70,7 @@ def set_record_binding():
 
 def capture_binding(event):
     global record_binding
+    # Convert the key combination to a format that pynput can use
     record_binding = f"<{event.keysym}>"
     config["record_binding"] = record_binding
     save_config(config)
@@ -151,22 +81,10 @@ def capture_binding(event):
 def update_binding_button():
     binding_button.config(text=f"Binding: {record_binding or 'None'}")
 
-def on_key_press(event):
-    if f"<{event.keysym}>" == record_binding:
-        record_audio()
-
-# Create main window
-app = tk.Tk()
-app.title("loopBack")
-app.geometry("345x350")
-app.resizable(False, False)
-app.configure(bg="#252422")
-app.bind("<KeyPress>", on_key_press)
-
+# GUI Elements
 MyLabel = tk.Label(app, text="loopBack", font=title_font, bg="#252422", fg="#FFFCF2")
 MyLabel.grid(row=0, column=1, padx=10, pady=10, sticky="nsew")
 
-# Set Binding button
 binding_button = tk.Button(
     app,
     text=f"Binding: {record_binding or 'None'}",
@@ -178,7 +96,6 @@ binding_button = tk.Button(
 )
 binding_button.grid(row=2, column=1, padx=10, pady=10, sticky="nsew")
 
-# Add Toggle Button for Listening
 toggle_button = tk.Button(
     app,
     text="Start Listening",
@@ -186,11 +103,10 @@ toggle_button = tk.Button(
     bg="#EB5E28",
     fg="#FFFCF2",
     width=35,
-    command=toggle_listening
+    command=lambda: toggle_listening(toggle_button, update_status)
 )
 toggle_button.grid(row=3, column=1, padx=10, pady=10, sticky="nsew")
 
-# Record button
 record_button = tk.Button(
     app,
     text="Record",
@@ -198,11 +114,10 @@ record_button = tk.Button(
     bg="#EB5E28",
     fg="#FFFCF2",
     width=35,
-    command=record_audio
+    command=lambda: save_combined_recording(update_status)
 )
 record_button.grid(row=4, column=1, padx=10, pady=10, sticky="nsew")
 
-# Status
 status_box = tk.Text(
     app,
     height=8,
@@ -216,13 +131,16 @@ status_box = tk.Text(
 status_box.grid(row=6, column=1, columnspan=3, padx=10, pady=10, sticky="nsew")
 
 def on_closing():
-    listening.clear()
+    global listener
+    if listener:
+        listener.stop()
+    cleanup()
     app.destroy()
 
 app.protocol("WM_DELETE_WINDOW", on_closing)
 
+# Start the keyboard listener
+start_keyboard_listener()
+
 # Run the application
 app.mainloop()
-
-# Cleanup
-p.terminate()
